@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Load Sensor Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-color: #222;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        h2 {
+            margin-bottom: 10px;
+        }
+        #webcam {
+            width: 640px;
+            height: 360px;
+            background: black;
+            border-radius: 8px;
+        }
+        .dashboard {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-top: 15px;
+            gap: 20px;
+        }
+        .graph-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .graph {
+            width: 500px;
+            height: 300px;
+            border-radius: 8px;
+            border: none;
+            background: white;
+        }
+        .donut-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        .donut-chart {
+            width: 150px;
+            height: 150px;
+        }
+        .controls {
+            margin-top: 10px;
+        }
+        button {
+            padding: 8px 15px;
+            margin: 5px;
+            font-size: 14px;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        #startBtn {
+            background-color: green;
+            color: white;
+        }
+        #stopBtn {
+            background-color: red;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Load Sensor Dashboard</h2>
+
+    <!-- Webcam Video -->
+    <video id="webcam" autoplay></video>
+    
+    <!-- Recording Controls -->
+    <div class="controls">
+        <button id="startBtn">Start Recording</button>
+        <button id="stopBtn" disabled>Stop Recording</button>
+    </div>
+
+    <!-- Dashboard Section -->
+    <div class="dashboard">
+        <!-- ThingSpeak Graph -->
+        <div class="graph-container">
+            <iframe class="graph" id="thingspeakGraph" allowfullscreen></iframe>
+        </div>
+
+        <!-- Donut Charts (Running Average + WiFi Signal) -->
+        <div class="donut-container">
+            <canvas id="runningAvgChart" class="donut-chart"></canvas>
+            <canvas id="wifiSignalChart" class="donut-chart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Webcam Setup
+        let video = document.getElementById("webcam");
+        let mediaRecorder;
+        let recordedChunks = [];
+
+        // Access Webcam
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+            .then(stream => {
+                video.srcObject = stream;
+                mediaRecorder = new MediaRecorder(stream);
+
+                mediaRecorder.ondataavailable = event => {
+                    if (event.data.size > 0) recordedChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunks, { type: "video/webm" });
+                    const url = URL.createObjectURL(blob);
+                    
+                    // Create a download link
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `recorded-video-${Date.now()}.webm`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                };
+            })
+            .catch(error => {
+                console.error("Webcam access denied:", error);
+            });
+
+        // Start Recording
+        document.getElementById("startBtn").addEventListener("click", () => {
+            recordedChunks = [];
+            mediaRecorder.start();
+            document.getElementById("startBtn").disabled = true;
+            document.getElementById("stopBtn").disabled = false;
+        });
+
+        // Stop Recording
+        document.getElementById("stopBtn").addEventListener("click", () => {
+            mediaRecorder.stop();
+            document.getElementById("startBtn").disabled = false;
+            document.getElementById("stopBtn").disabled = true;
+        });
+
+        // Set Graph URL
+        document.getElementById("thingspeakGraph").src = "https://thingspeak.mathworks.com/channels/2823326/charts/1?bgcolor=%23ffffff&color=%23d62020&dynamic=true";
+
+        // Running Average Donut Chart
+        let runningAvgCtx = document.getElementById("runningAvgChart").getContext("2d");
+        let runningAvgChart = new Chart(runningAvgCtx, {
+            type: "doughnut",
+            data: {
+                labels: ["Running Average", "Remaining"],
+                datasets: [{
+                    data: [68, 32], // Default values
+                    backgroundColor: ["#4CAF50", "#ddd"]
+                }]
+            },
+            options: {
+                responsive: false,
+                cutout: "70%"
+            }
+        });
+
+        // WiFi Signal Strength Donut Chart
+        let wifiSignalCtx = document.getElementById("wifiSignalChart").getContext("2d");
+        let wifiSignalChart = new Chart(wifiSignalCtx, {
+            type: "doughnut",
+            data: {
+                labels: ["WiFi Strength", "Weak Signal"],
+                datasets: [{
+                    data: [75, 25], // Default WiFi Signal Strength
+                    backgroundColor: ["#2196F3", "#ddd"]
+                }]
+            },
+            options: {
+                responsive: false,
+                cutout: "70%"
+            }
+        });
+
+        // Fetch ThingSpeak Data and Update Running Average Chart
+        function updateRunningAverage() {
+            fetch("https://api.thingspeak.com/channels/2823326/feeds.json?results=10")
+                .then(response => response.json())
+                .then(data => {
+                    let values = data.feeds.map(feed => parseFloat(feed.field1));
+                    let average = values.reduce((sum, value) => sum + value, 0) / values.length;
+                    let roundedAvg = Math.round(average);
+
+                    runningAvgChart.data.datasets[0].data = [roundedAvg, 100 - roundedAvg];
+                    runningAvgChart.update();
+                })
+                .catch(error => console.error("Error fetching data:", error));
+        }
+
+        // Function to simulate WiFi Signal Strength updates
+        function updateWifiSignal() {
+            let signalStrength = Math.floor(Math.random() * 100);
+            wifiSignalChart.data.datasets[0].data = [signalStrength, 100 - signalStrength];
+            wifiSignalChart.update();
+        }
+
+        // Update Graphs every 10 seconds
+        setInterval(updateRunningAverage, 10000);
+        setInterval(updateWifiSignal, 10000);
+        updateRunningAverage(); // Initial load
+        updateWifiSignal();
+    </script>
+
+</body>
+</html>
